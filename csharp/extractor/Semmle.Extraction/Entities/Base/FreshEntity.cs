@@ -13,7 +13,7 @@ namespace Semmle.Extraction
 
         protected abstract void Populate(TextWriter trapFile);
 
-        protected void TryPopulate()
+        public void TryPopulate()
         {
             Context.Try(null, null, () => Populate(Context.TrapWriter.Writer));
         }
@@ -33,6 +33,6 @@ namespace Semmle.Extraction
 
         public override Microsoft.CodeAnalysis.Location? ReportingLocation => null;
 
-        public override TrapStackBehaviour TrapStackBehaviour { get; }
+        public override TrapStackBehaviour TrapStackBehaviour => TrapStackBehaviour.NoLabel;
     }
 }

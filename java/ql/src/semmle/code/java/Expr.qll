@@ -46,17 +46,6 @@ class Expr extends ExprParent, @expr {
    */
   int getKind() { exprs(this, result, _, _, _) }
 
-  /**
-   * DEPRECATED: This is no longer necessary. See `Expr.isParenthesized()`.
-   *
-   * Gets this expression with any surrounding parentheses removed.
-   */
-  deprecated Expr getProperExpr() {
-    result = this.(ParExpr).getExpr().getProperExpr()
-    or
-    result = this and not this instanceof ParExpr
-  }
-
   /** Gets the statement containing this expression, if any. */
   Stmt getEnclosingStmt() { statementEnclosingExpr(this, result) }
 
@@ -638,7 +627,21 @@ class BooleanLiteral extends Literal, @booleanliteral {
   override string getAPrimaryQlClass() { result = "BooleanLiteral" }
 }
 
-/** An integer literal. For example, `23`. */
+/**
+ * An integer literal. For example, `23`.
+ *
+ * An integer literal can never be negative except when:
+ * - It is written in binary, octal or hexadecimal notation
+ * - It is written in decimal notation, has the value `2147483648` and is preceded
+ *   by a minus; in this case the value of the IntegerLiteral is -2147483648 and
+ *   the preceding minus will *not* be modeled as `MinusExpr`.
+ *
+ * In all other cases the preceding minus, if any, will be modeled as a separate
+ * `MinusExpr`.
+ *
+ * The last exception is necessary because `2147483648` on its own would not be
+ * a valid integer literal (and could also not be parsed as CodeQL `int`).
+ */
 class IntegerLiteral extends Literal, @integerliteral {
   /** Gets the int representation of this literal. */
   int getIntValue() { result = getValue().toInt() }
@@ -646,18 +649,55 @@ class IntegerLiteral extends Literal, @integerliteral {
   override string getAPrimaryQlClass() { result = "IntegerLiteral" }
 }
 
-/** A long literal. For example, `23l`. */
+/**
+ * A long literal. For example, `23L`.
+ *
+ * A long literal can never be negative except when:
+ * - It is written in binary, octal or hexadecimal notation
+ * - It is written in decimal notation, has the value `9223372036854775808` and
+ *   is preceded by a minus; in this case the value of the LongLiteral is
+ *   -9223372036854775808 and the preceding minus will *not* be modeled as
+ *   `MinusExpr`.
+ *
+ * In all other cases the preceding minus, if any, will be modeled as a separate
+ * `MinusExpr`.
+ *
+ * The last exception is necessary because `9223372036854775808` on its own
+ * would not be a valid long literal.
+ */
 class LongLiteral extends Literal, @longliteral {
   override string getAPrimaryQlClass() { result = "LongLiteral" }
 }
 
-/** A floating point literal. For example, `4.2f`. */
+/**
+ * A float literal. For example, `4.2f`.
+ *
+ * A float literal is never negative; a preceding minus, if any, will always
+ * be modeled as separate `MinusExpr`.
+ */
 class FloatingPointLiteral extends Literal, @floatingpointliteral {
+  /**
+   * Gets the value of this literal as CodeQL 64-bit `float`. The value will
+   * be parsed as Java 32-bit `float` and then converted to a CodeQL `float`.
+   */
+  float getFloatValue() { result = getValue().toFloat() }
+
   override string getAPrimaryQlClass() { result = "FloatingPointLiteral" }
 }
 
-/** A double literal. For example, `4.2`. */
+/**
+ * A double literal. For example, `4.2`.
+ *
+ * A double literal is never negative; a preceding minus, if any, will always
+ * be modeled as separate `MinusExpr`.
+ */
 class DoubleLiteral extends Literal, @doubleliteral {
+  /**
+   * Gets the value of this literal as CodeQL 64-bit `float`. The result will
+   * have the same effective value as the Java `double` literal.
+   */
+  float getDoubleValue() { result = getValue().toFloat() }
+
   override string getAPrimaryQlClass() { result = "DoubleLiteral" }
 }
 
@@ -1229,7 +1269,7 @@ class ConditionalExpr extends Expr, @conditionalexpr {
 /**
  * A `switch` expression.
  */
-class SwitchExpr extends Expr, @switchexpr {
+class SwitchExpr extends Expr, StmtParent, @switchexpr {
   /** Gets an immediate child statement of this `switch` expression. */
   Stmt getAStmt() { result.getParent() = this }
 
@@ -1267,19 +1307,6 @@ class SwitchExpr extends Expr, @switchexpr {
   override string getAPrimaryQlClass() { result = "SwitchExpr" }
 }
 
-/**
- * DEPRECATED: Use `Expr.isParenthesized()` instead.
- *
- * A parenthesised expression.
- */
-deprecated class ParExpr extends Expr, @parexpr {
-  /** Gets the expression inside the parentheses. */
-  deprecated Expr getExpr() { result.getParent() = this }
-
-  /** Gets a printable representation of this expression. */
-  override string toString() { result = "(...)" }
-}
-
 /** An `instanceof` expression. */
 class InstanceOfExpr extends Expr, @instanceofexpr {
   /** Gets the expression on the left-hand side of the `instanceof` operator. */
@@ -1305,6 +1332,9 @@ class InstanceOfExpr extends Expr, @instanceofexpr {
 
   /** Gets the access to the type on the right-hand side of the `instanceof` operator. */
   Expr getTypeName() { result.isNthChildOf(this, 1) }
+
+  /** Gets the type this `instanceof` expression checks for. */
+  RefType getCheckedType() { result = getTypeName().getType() }
 
   /** Gets a printable representation of this expression. */
   override string toString() { result = "...instanceof..." }
@@ -1397,6 +1427,12 @@ class VariableAssign extends VariableUpdate {
 class TypeLiteral extends Expr, @typeliteral {
   /** Gets the access to the type whose class is accessed. */
   Expr getTypeName() { result.getParent() = this }
+
+  /**
+   * Gets the type this type literal refers to. For example for `String.class` the
+   * result is the type representing `String`.
+   */
+  Type getReferencedType() { result = getTypeName().getType() }
 
   /** Gets a printable representation of this expression. */
   override string toString() { result = this.getTypeName().toString() + ".class" }
@@ -1757,7 +1793,7 @@ class WildcardTypeAccess extends Expr, @wildcardtypeaccess {
  * This includes method calls, constructor and super constructor invocations,
  * and constructors invoked through class instantiation.
  */
-class Call extends Top, @caller {
+class Call extends ExprParent, @caller {
   /** Gets an argument supplied in this call. */
   /*abstract*/ Expr getAnArgument() { none() }
 

@@ -6,7 +6,7 @@
  * directed and labeled; they specify how the components represented by nodes relate to each other.
  */
 
-import python
+private import python
 import semmle.python.dataflow.new.DataFlow
 
 /**
@@ -55,7 +55,7 @@ module API {
     /**
      * Gets a call to the function represented by this API component.
      */
-    DataFlow::Node getACall() { result = getReturn().getAnImmediateUse() }
+    DataFlow::CallCfgNode getACall() { result = getReturn().getAnImmediateUse() }
 
     /**
      * Gets a node representing member `m` of this API component.
@@ -96,6 +96,11 @@ module API {
      * Gets a node representing a subclass of the class represented by this node.
      */
     Node getASubclass() { result = getASuccessor(Label::subclass()) }
+
+    /**
+     * Gets a node representing the result from awaiting this node.
+     */
+    Node getAwaited() { result = getASuccessor(Label::await()) }
 
     /**
      * Gets a string representation of the lexicographically least among all shortest access paths
@@ -216,6 +221,9 @@ module API {
    */
   Node moduleImport(string m) { result = Impl::MkModuleImport(m) }
 
+  /** Gets a node corresponding to the built-in with the given name, if any. */
+  Node builtin(string n) { result = moduleImport("builtins").getMember(n) }
+
   /**
    * Provides the actual implementation of API graphs, cached for performance.
    *
@@ -300,11 +308,18 @@ module API {
       MkRoot() or
       /** An abstract representative for imports of the module called `name`. */
       MkModuleImport(string name) {
-        imports(_, name)
+        // Ignore the following module name for Python 2, as we alias `__builtin__` to `builtins` elsewhere
+        (name != "__builtin__" or major_version() = 3) and
+        (
+          imports(_, name)
+          or
+          // When we `import foo.bar.baz` we want to create API graph nodes also for the prefixes
+          // `foo` and `foo.bar`:
+          name = any(ImportExpr e | not e.isRelative()).getAnImportedModuleName()
+        )
         or
-        // When we `import foo.bar.baz` we want to create API graph nodes also for the prefixes
-        // `foo` and `foo.bar`:
-        name = any(ImportExpr e | not e.isRelative()).getAnImportedModuleName()
+        // The `builtins` module should always be implicitly available
+        name = "builtins"
       } or
       /** A use of an API member at the node `nd`. */
       MkUse(DataFlow::Node nd) { use(_, _, nd) }
@@ -339,6 +354,97 @@ module API {
       )
     }
 
+    /** Gets the name of a known built-in. */
+    private string getBuiltInName() {
+      // These lists were created by inspecting the `builtins` and `__builtin__` modules in
+      // Python 3 and 2 respectively, using the `dir` built-in.
+      // Built-in functions and exceptions shared between Python 2 and 3
+      result in [
+          "abs", "all", "any", "bin", "bool", "bytearray", "callable", "chr", "classmethod",
+          "compile", "complex", "delattr", "dict", "dir", "divmod", "enumerate", "eval", "filter",
+          "float", "format", "frozenset", "getattr", "globals", "hasattr", "hash", "help", "hex",
+          "id", "input", "int", "isinstance", "issubclass", "iter", "len", "list", "locals", "map",
+          "max", "memoryview", "min", "next", "object", "oct", "open", "ord", "pow", "print",
+          "property", "range", "repr", "reversed", "round", "set", "setattr", "slice", "sorted",
+          "staticmethod", "str", "sum", "super", "tuple", "type", "vars", "zip", "__import__",
+          // Exceptions
+          "ArithmeticError", "AssertionError", "AttributeError", "BaseException", "BufferError",
+          "BytesWarning", "DeprecationWarning", "EOFError", "EnvironmentError", "Exception",
+          "FloatingPointError", "FutureWarning", "GeneratorExit", "IOError", "ImportError",
+          "ImportWarning", "IndentationError", "IndexError", "KeyError", "KeyboardInterrupt",
+          "LookupError", "MemoryError", "NameError", "NotImplemented", "NotImplementedError",
+          "OSError", "OverflowError", "PendingDeprecationWarning", "ReferenceError", "RuntimeError",
+          "RuntimeWarning", "StandardError", "StopIteration", "SyntaxError", "SyntaxWarning",
+          "SystemError", "SystemExit", "TabError", "TypeError", "UnboundLocalError",
+          "UnicodeDecodeError", "UnicodeEncodeError", "UnicodeError", "UnicodeTranslateError",
+          "UnicodeWarning", "UserWarning", "ValueError", "Warning", "ZeroDivisionError",
+          // Added for compatibility
+          "exec"
+        ]
+      or
+      // Built-in constants shared between Python 2 and 3
+      result in ["False", "True", "None", "NotImplemented", "Ellipsis", "__debug__"]
+      or
+      // Python 3 only
+      result in [
+          "ascii", "breakpoint", "bytes", "exec",
+          // Exceptions
+          "BlockingIOError", "BrokenPipeError", "ChildProcessError", "ConnectionAbortedError",
+          "ConnectionError", "ConnectionRefusedError", "ConnectionResetError", "FileExistsError",
+          "FileNotFoundError", "InterruptedError", "IsADirectoryError", "ModuleNotFoundError",
+          "NotADirectoryError", "PermissionError", "ProcessLookupError", "RecursionError",
+          "ResourceWarning", "StopAsyncIteration", "TimeoutError"
+        ]
+      or
+      // Python 2 only
+      result in [
+          "basestring", "cmp", "execfile", "file", "long", "raw_input", "reduce", "reload",
+          "unichr", "unicode", "xrange"
+        ]
+    }
+
+    /**
+     * Gets a data flow node that is likely to refer to a built-in with the name `name`.
+     *
+     * Currently this is an over-approximation, and may not account for things like overwriting a
+     * built-in with a different value.
+     */
+    private DataFlow::Node likely_builtin(string name) {
+      exists(Module m |
+        result.asCfgNode() =
+          any(NameNode n |
+            possible_builtin_accessed_in_module(n, name, m) and
+            not possible_builtin_defined_in_module(name, m)
+          )
+      )
+    }
+
+    /**
+     * Holds if a global variable called `name` (which is also the name of a built-in) is assigned
+     * a value in the module `m`.
+     */
+    private predicate possible_builtin_defined_in_module(string name, Module m) {
+      exists(NameNode n |
+        not exists(LocalVariable v | n.defines(v)) and
+        n.isStore() and
+        name = n.getId() and
+        name = getBuiltInName() and
+        m = n.getEnclosingModule()
+      )
+    }
+
+    /**
+     * Holds if `n` is an access of a global variable called `name` (which is also the name of a
+     * built-in) inside the module `m`.
+     */
+    private predicate possible_builtin_accessed_in_module(NameNode n, string name, Module m) {
+      n.isGlobal() and
+      n.isLoad() and
+      name = n.getId() and
+      name = getBuiltInName() and
+      m = n.getEnclosingModule()
+    }
+
     /**
      * Holds if `ref` is a use of a node that should have an incoming edge from `base` labeled
      * `lbl` in the API graph.
@@ -368,7 +474,19 @@ module API {
         exists(DataFlow::Node superclass | pred.flowsTo(superclass) |
           ref.asExpr().(ClassExpr).getABase() = superclass.asExpr()
         )
+        or
+        // awaiting
+        exists(Await await, DataFlow::Node awaitedValue |
+          lbl = Label::await() and
+          ref.asExpr() = await and
+          await.getValue() = awaitedValue.asExpr() and
+          pred.flowsTo(awaitedValue)
+        )
       )
+      or
+      // Built-ins, treated as members of the module `builtins`
+      base = MkModuleImport("builtins") and
+      lbl = Label::member(any(string name | ref = likely_builtin(name)))
     }
 
     /**
@@ -381,45 +499,45 @@ module API {
         imports(ref, name)
       )
       or
+      // Ensure the Python 2 `__builtin__` module gets the name of the Python 3 `builtins` module.
+      major_version() = 2 and
+      nd = MkModuleImport("builtins") and
+      imports(ref, "__builtin__")
+      or
       nd = MkUse(ref)
     }
 
     /**
-     * Gets a data-flow node to which `nd`, which is a use of an API-graph node, flows.
+     * Gets a data-flow node to which `src`, which is a use of an API-graph node, flows.
      *
-     * The flow from `nd` to that node may be inter-procedural.
+     * The flow from `src` to that node may be inter-procedural.
      */
-    private DataFlow::LocalSourceNode trackUseNode(
+    private DataFlow::TypeTrackingNode trackUseNode(
       DataFlow::LocalSourceNode src, DataFlow::TypeTracker t
     ) {
       t.start() and
       use(_, src) and
       result = src
       or
-      // Due to bad performance when using `trackUseNode(t2, attr_name).track(t2, t)`
-      // we have inlined that code and forced a join
-      exists(DataFlow::StepSummary summary |
-        t = trackUseNode_first_join(src, result, summary).append(summary)
-      )
+      exists(DataFlow::TypeTracker t2 | result = trackUseNode(src, t2).track(t2, t))
     }
 
-    pragma[nomagic]
-    private DataFlow::TypeTracker trackUseNode_first_join(
-      DataFlow::LocalSourceNode src, DataFlow::LocalSourceNode res, DataFlow::StepSummary summary
-    ) {
-      DataFlow::StepSummary::step(trackUseNode(src, result), res, summary)
-    }
-
+    /**
+     * Gets a data-flow node to which `src`, which is a use of an API-graph node, flows.
+     *
+     * The flow from `src` to that node may be inter-procedural.
+     */
     cached
     DataFlow::LocalSourceNode trackUseNode(DataFlow::LocalSourceNode src) {
-      result = trackUseNode(src, DataFlow::TypeTracker::end())
+      result = trackUseNode(src, DataFlow::TypeTracker::end()) and
+      not result instanceof DataFlow::ModuleVariableNode
     }
 
     /**
      * Holds if there is an edge from `pred` to `succ` in the API graph that is labeled with `lbl`.
      */
     cached
-    predicate edge(Node pred, string lbl, Node succ) {
+    predicate edge(TApiNode pred, string lbl, TApiNode succ) {
       /* There's an edge from the root node for each imported module. */
       exists(string m |
         pred = MkRoot() and
@@ -479,5 +597,9 @@ private module Label {
   /** Gets the `return` edge label. */
   string return() { result = "getReturn()" }
 
+  /** Gets the `subclass` edge label. */
   string subclass() { result = "getASubclass()" }
+
+  /** Gets the `await` edge label. */
+  string await() { result = "getAwaited()" }
 }

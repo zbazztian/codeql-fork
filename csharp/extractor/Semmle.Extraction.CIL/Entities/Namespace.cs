@@ -14,17 +14,16 @@ namespace Semmle.Extraction.CIL.Entities
 
         public bool IsGlobalNamespace => ParentNamespace is null;
 
-        public override void WriteId(TextWriter trapFile)
+        public override void WriteId(EscapingTextWriter trapFile)
         {
-            if (ParentNamespace != null && !ParentNamespace.IsGlobalNamespace)
+            if (ParentNamespace is not null && !ParentNamespace.IsGlobalNamespace)
             {
                 ParentNamespace.WriteId(trapFile);
                 trapFile.Write('.');
             }
             trapFile.Write(Name);
+            trapFile.Write(";namespace");
         }
-
-        public override string IdSuffix => ";namespacee";
 
         public override bool Equals(object? obj)
         {
@@ -77,7 +76,7 @@ namespace Semmle.Extraction.CIL.Entities
             get
             {
                 yield return Tuples.namespaces(this, Name);
-                if (ParentNamespace is object)
+                if (ParentNamespace is not null)
                     yield return Tuples.parent_namespace(this, ParentNamespace);
             }
         }

@@ -4,6 +4,7 @@
  */
 
 import javascript
+private import semmle.javascript.security.TaintedUrlSuffix
 
 module DomBasedXss {
   import DomBasedXssCustomizations::DomBasedXss
@@ -12,6 +13,11 @@ module DomBasedXss {
    * DEPRECATED. Use `HtmlInjectionConfiguration` or `JQueryHtmlOrSelectorInjectionConfiguration`.
    */
   deprecated class Configuration = HtmlInjectionConfiguration;
+
+  /**
+   * DEPRECATED. Use `Vue::VHtmlSourceWrite` instead.
+   */
+  deprecated class VHtmlSourceWrite = Vue::VHtmlSourceWrite;
 
   /**
    * A taint-tracking configuration for reasoning about XSS.
@@ -53,29 +59,15 @@ module DomBasedXss {
     override predicate isSource(DataFlow::Node source, DataFlow::FlowLabel label) {
       // Reuse any source not derived from location
       source instanceof Source and
-      not source = DOM::locationRef() and
+      not source = [DOM::locationRef(), DOM::locationRef().getAPropertyRead()] and
       label.isTaint()
       or
-      source = DOM::locationSource() and
-      label.isData() // Require transformation before reaching sink
-      or
-      source = DOM::locationRef().getAPropertyRead(["hash", "search"]) and
-      label.isData() // Require transformation before reaching sink
+      source = [DOM::locationSource(), DOM::locationRef().getAPropertyRead(["hash", "search"])] and
+      label = TaintedUrlSuffix::label()
     }
 
     override predicate isSink(DataFlow::Node sink, DataFlow::FlowLabel label) {
       sink instanceof JQueryHtmlOrSelectorSink and label.isTaint()
-    }
-
-    override predicate isAdditionalFlowStep(
-      DataFlow::Node pred, DataFlow::Node succ, DataFlow::FlowLabel predlbl,
-      DataFlow::FlowLabel succlbl
-    ) {
-      exists(TaintTracking::AdditionalTaintStep step |
-        step.step(pred, succ) and
-        predlbl.isData() and
-        succlbl.isTaint()
-      )
     }
 
     override predicate isSanitizer(DataFlow::Node node) {
@@ -88,15 +80,16 @@ module DomBasedXss {
       guard instanceof SanitizerGuard
     }
 
-    override predicate isSanitizerEdge(DataFlow::Node pred, DataFlow::Node succ) {
-      DomBasedXss::isOptionallySanitizedEdge(pred, succ)
+    override predicate isAdditionalFlowStep(
+      DataFlow::Node src, DataFlow::Node trg, DataFlow::FlowLabel inlbl, DataFlow::FlowLabel outlbl
+    ) {
+      TaintedUrlSuffix::step(src, trg, inlbl, outlbl)
       or
-      // Avoid stepping from location -> location.hash, as the .hash is already treated as a source
-      // (with a different flow label)
-      exists(DataFlow::PropRead read |
-        read = DOM::locationRef().getAPropertyRead(["hash", "search"]) and
-        pred = read.getBase() and
-        succ = read
+      exists(DataFlow::Node operator |
+        StringConcatenation::taintStep(src, trg, operator, _) and
+        StringConcatenation::getOperand(operator, 0).getStringValue() = "<" + any(string s) and
+        inlbl = TaintedUrlSuffix::label() and
+        outlbl.isTaint()
       )
     }
   }

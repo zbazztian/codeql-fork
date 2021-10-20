@@ -40,7 +40,9 @@ module LogInjection {
    * A source of remote user controlled input.
    */
   class RemoteSource extends Source {
-    RemoteSource() { this instanceof RemoteFlowSource }
+    RemoteSource() {
+      this instanceof RemoteFlowSource and not this instanceof ClientSideRemoteFlowSource
+    }
   }
 
   /**
@@ -64,5 +66,12 @@ module LogInjection {
    */
   class HtmlSanitizer extends Sanitizer {
     HtmlSanitizer() { this instanceof HtmlSanitizerCall }
+  }
+
+  /**
+   * A call to `JSON.stringify` or similar, seen as sanitizing log output.
+   */
+  class JsonStringifySanitizer extends Sanitizer {
+    JsonStringifySanitizer() { this = any(JsonStringifyCall c).getOutput() }
   }
 }

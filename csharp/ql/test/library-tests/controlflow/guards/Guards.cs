@@ -1,5 +1,5 @@
 using System;
-
+#nullable enable
 public class Guards
 {
     public string? Field;
@@ -349,4 +349,3 @@ public class Guards
             o.ToString(); // null guarded
     }
 }
-

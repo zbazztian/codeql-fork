@@ -1,5 +1,6 @@
 using Semmle.Extraction.Entities;
 using System.IO;
+using System;
 
 namespace Semmle.Extraction.CSharp.Entities
 {
@@ -18,7 +19,7 @@ namespace Semmle.Extraction.CSharp.Entities
         public string Text { get { return Symbol.Item2; } }
         public string RawText { get; private set; }
 
-        private Location location;
+        private Location? location;
 
         public override void Populate(TextWriter trapFile)
         {
@@ -27,11 +28,11 @@ namespace Semmle.Extraction.CSharp.Entities
             trapFile.commentline_location(this, location);
         }
 
-        public override Microsoft.CodeAnalysis.Location ReportingLocation => location.Symbol;
+        public override Microsoft.CodeAnalysis.Location? ReportingLocation => location?.Symbol;
 
         public override bool NeedsPopulation => true;
 
-        public override void WriteId(TextWriter trapFile)
+        public override void WriteId(EscapingTextWriter trapFile)
         {
             trapFile.WriteSubId(Context.CreateLocation(Location));
             trapFile.Write(";commentline");

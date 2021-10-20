@@ -11,10 +11,10 @@ namespace Semmle.Extraction.CIL.Entities
         public File(Context cx, string path) : base(cx)
         {
             this.OriginalPath = path;
-            TransformedPath = Cx.Extractor.PathTransformer.Transform(OriginalPath);
+            TransformedPath = Context.Extractor.PathTransformer.Transform(OriginalPath);
         }
 
-        public override void WriteId(TextWriter trapFile)
+        public override void WriteId(EscapingTextWriter trapFile)
         {
             trapFile.Write(TransformedPath.DatabaseId);
             trapFile.Write(";sourcefile");
@@ -33,7 +33,7 @@ namespace Semmle.Extraction.CIL.Entities
             {
                 if (TransformedPath.ParentDirectory is PathTransformer.ITransformedPath dir)
                 {
-                    var parent = Cx.CreateFolder(dir);
+                    var parent = Context.CreateFolder(dir);
                     yield return parent;
                     yield return Tuples.containerparent(parent, this);
                 }

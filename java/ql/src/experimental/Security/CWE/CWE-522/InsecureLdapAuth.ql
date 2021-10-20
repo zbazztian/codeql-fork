@@ -2,6 +2,8 @@
  * @name Insecure LDAP authentication
  * @description LDAP authentication with credentials sent in cleartext.
  * @kind path-problem
+ * @problem.severity warning
+ * @precision medium
  * @id java/insecure-ldap-auth
  * @tags security
  *       external/cwe-522
@@ -26,11 +28,6 @@ class InsecureLdapUrlLiteral extends StringLiteral {
       not s.substring(7, s.length()) instanceof PrivateHostName
     )
   }
-}
-
-/** The interface `javax.naming.Context`. */
-class TypeNamingContext extends Interface {
-  TypeNamingContext() { this.hasQualifiedName("javax.naming", "Context") }
 }
 
 /** The class `java.util.Hashtable`. */

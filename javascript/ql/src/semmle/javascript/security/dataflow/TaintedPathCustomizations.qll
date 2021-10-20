@@ -557,7 +557,12 @@ module TaintedPath {
    * tainted-path vulnerabilities.
    */
   class RemoteFlowSourceAsSource extends Source {
-    RemoteFlowSourceAsSource() { this instanceof RemoteFlowSource }
+    RemoteFlowSourceAsSource() {
+      exists(RemoteFlowSource src |
+        this = src and
+        not src instanceof ClientSideRemoteFlowSource
+      )
+    }
   }
 
   /**
@@ -569,6 +574,17 @@ module TaintedPath {
       astNode = any(Require rq).getArgument(0) or
       astNode = any(ExternalModuleReference rq).getExpression() or
       astNode = any(AmdModuleDefinition amd).getDependencies()
+    }
+  }
+
+  /**
+   * An expression whose value is resolved to a module using the [resolve](http://npmjs.com/package/resolve) library.
+   */
+  class ResolveModuleSink extends Sink {
+    ResolveModuleSink() {
+      this = API::moduleImport("resolve").getACall().getArgument(0)
+      or
+      this = API::moduleImport("resolve").getMember("sync").getACall().getArgument(0)
     }
   }
 
@@ -632,6 +648,55 @@ module TaintedPath {
   }
 
   /**
+   * A path argument given to a `Page` in puppeteer, specifying where a pdf/screenshot should be saved.
+   */
+  private class PuppeteerPath extends TaintedPath::Sink {
+    PuppeteerPath() {
+      this =
+        Puppeteer::page()
+            .getMember(["pdf", "screenshot"])
+            .getParameter(0)
+            .getMember("path")
+            .getARhs()
+    }
+  }
+
+  /**
+   * An argument given to the `prettier` library specifying the location of a config file.
+   */
+  private class PrettierFileSink extends TaintedPath::Sink {
+    PrettierFileSink() {
+      this =
+        API::moduleImport("prettier")
+            .getMember(["resolveConfig", "resolveConfigFile", "getFileInfo"])
+            .getACall()
+            .getArgument(0)
+      or
+      this =
+        API::moduleImport("prettier")
+            .getMember("resolveConfig")
+            .getACall()
+            .getParameter(1)
+            .getMember("config")
+            .getARhs()
+    }
+  }
+
+  /**
+   * The `cwd` option for the `read-pkg` library.
+   */
+  private class ReadPkgCwdSink extends TaintedPath::Sink {
+    ReadPkgCwdSink() {
+      this =
+        API::moduleImport("read-pkg")
+            .getMember(["readPackageAsync", "readPackageSync"])
+            .getParameter(0)
+            .getMember("cwd")
+            .getARhs()
+    }
+  }
+
+  /**
    * Holds if there is a step `src -> dst` mapping `srclabel` to `dstlabel` relevant for path traversal vulnerabilities.
    */
   predicate isAdditionalTaintedPathFlowStep(
@@ -644,7 +709,7 @@ module TaintedPath {
     srclabel instanceof Label::PosixPath and
     dstlabel instanceof Label::PosixPath and
     (
-      any(UriLibraryStep step).step(src, dst)
+      TaintTracking::uriStep(src, dst)
       or
       exists(DataFlow::CallNode decode |
         decode.getCalleeName() = "decodeURIComponent" or decode.getCalleeName() = "decodeURI"
@@ -654,9 +719,9 @@ module TaintedPath {
       )
     )
     or
-    promiseTaintStep(src, dst) and srclabel = dstlabel
+    TaintTracking::promiseStep(src, dst) and srclabel = dstlabel
     or
-    any(TaintTracking::PersistentStorageTaintStep st).step(src, dst) and srclabel = dstlabel
+    TaintTracking::persistentStorageStep(src, dst) and srclabel = dstlabel
     or
     exists(DataFlow::PropRead read | read = dst |
       src = read.getBase() and
@@ -669,15 +734,9 @@ module TaintedPath {
     exists(DataFlow::MethodCallNode mcn, string name |
       srclabel = dstlabel and dst = mcn and mcn.calls(src, name)
     |
-      exists(string substringMethodName |
-        substringMethodName = "substr" or
-        substringMethodName = "substring" or
-        substringMethodName = "slice"
-      |
-        name = substringMethodName and
-        // to avoid very dynamic transformations, require at least one fixed index
-        exists(mcn.getAnArgument().asExpr().getIntValue())
-      )
+      name = StringOps::substringMethodName() and
+      // to avoid very dynamic transformations, require at least one fixed index
+      exists(mcn.getAnArgument().asExpr().getIntValue())
       or
       exists(string argumentlessMethodName |
         argumentlessMethodName = "toLocaleLowerCase" or
@@ -746,6 +805,12 @@ module TaintedPath {
       ) and
       srclabel instanceof Label::SplitPath and
       dstlabel.(Label::PosixPath).canContainDotDotSlash()
+    )
+    or
+    exists(API::CallNode call | call = API::moduleImport("slash").getACall() |
+      src = call.getArgument(0) and
+      dst = call and
+      srclabel = dstlabel
     )
   }
 

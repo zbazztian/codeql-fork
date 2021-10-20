@@ -5,8 +5,7 @@ namespace Semmle.Extraction.CSharp.Entities
 {
     internal class NonGeneratedSourceLocation : Extraction.Entities.SourceLocation
     {
-        // todo: this can be changed to an override after the .NET 5 upgrade
-        private new Context Context => (Context)base.Context;
+        public override Context Context => (Context)base.Context;
 
         protected NonGeneratedSourceLocation(Context cx, Location init)
             : base(cx, init)
@@ -42,7 +41,7 @@ namespace Semmle.Extraction.CSharp.Entities
             get;
         }
 
-        public override void WriteId(TextWriter trapFile)
+        public override void WriteId(EscapingTextWriter trapFile)
         {
             trapFile.Write("loc,");
             trapFile.WriteSubId(FileEntity);

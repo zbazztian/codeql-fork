@@ -18,9 +18,14 @@ structures. To get started quickly, we recommend adopting a relatively simple
 setup, as outlined in the steps below.
 
 If you use Linux, Windows, or macOS version 10.14 ("Mojave") or earlier, simply
-follow the steps below. For macOS version 10.15 ("Catalina"), steps 1 and 4 are
-slightly different---for further details, see the sections labeled **Information
-for macOS "Catalina" users**.
+follow the steps below. For macOS version 10.15 ("Catalina") or newer, steps 1 
+and 4 are slightly different---for further details, see the sections labeled 
+**Information for macOS "Catalina" (or newer) users**.
+
+For information about installing the CodeQL CLI in a CI system to create results
+to display in GitHub as code scanning alerts, see 
+`Installing CodeQL CLI in your CI system <https://docs.github.com/en/code-security/secure-coding/using-codeql-code-scanning-with-your-existing-ci-system/installing-codeql-cli-in-your-ci-system>`__ 
+in the GitHub documentation.
 
 1. Download the CodeQL CLI zip package
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -61,13 +66,14 @@ Alternatively, you can download ``codeql.zip``, which contains the CLI for all s
 
    .. container:: name
 
-      **Information for macOS "Catalina" users**
+      **Information for macOS "Catalina" (or newer) users**
 
-   .. pull-quote:: macOS "Catalina"
+   .. pull-quote:: macOS "Catalina" (or newer)
       
-      If you use macOS version 10.15 ("Catalina"), you need to ensure that your web
-      browser does not automatically extract zip files. If you use Safari,
-      complete the following steps before downloading the CodeQL CLI zip archive:
+      If you use macOS version 10.15 ("Catalina"), version 11 ("Big Sur"), or the upcoming 
+      version 12 ("Monterey"), you need to ensure that your web browser does not automatically 
+      extract zip files. If you use Safari, complete the following steps before downloading 
+      the CodeQL CLI zip archive:
           
       i. Open Safari.
       ii. From the Safari menu, select **Preferences...**.
@@ -121,24 +127,24 @@ see ":doc:`About QL packs <about-ql-packs>`."
 
    There are different versions of the CodeQL queries available for different
    users. Check out the correct version for your use case:
+
+   - For the queries used on `LGTM.com <https://lgtm.com>`__, check out the
+     ``lgtm.com`` branch. You should use this branch for databases you've built
+     using the CodeQL CLI, fetched from code scanning on GitHub, or recently downloaded from LGTM.com.
+     The queries on the ``lgtm.com`` branch are more likely to be compatible 
+     with the ``latest`` CLI, so you'll be less likely to have to upgrade 
+     newly-created databases than if you use the ``main`` branch. Older databases 
+     may need to be upgraded before you can analyze them.
    
    - For the most up to date CodeQL queries, check out the ``main`` branch. 
      This branch represents the very latest version of CodeQL's analysis. Even
      databases created using the most recent version of the CLI may have to be
      upgraded before you can analyze them. For more information, see
      ":doc:`Upgrading CodeQL databases <upgrading-codeql-databases>`."
-    
-   - For the queries used on `LGTM.com <https://lgtm.com>`__, check out the
-     ``lgtm.com`` branch. You can run these queries on databases you've recently
-     downloaded from LGTM.com. Older databases may need to be upgraded before
-     you can analyze them. The queries on the ``lgtm.com`` branch are also more
-     likely to be compatible with the ``latest`` CLI, so you'll be less likely
-     to have to upgrade newly-created databases than if you use the ``main``
-     branch.
-           
+        
    - For the queries used in a particular LGTM Enterprise release, check out the
      branch tagged with the relevant release number. For example, the branch
-     tagged ``v1.23.0`` corresponds to LGTM Enterprise 1.23. You must use this
+     tagged ``v1.27.0`` corresponds to LGTM Enterprise 1.27. You must use this
      version if you want to upload data to LGTM Enterprise. For further
      information, see `Preparing CodeQL databases to upload to LGTM 
      <https://help.semmle.com/lgtm-enterprise/admin/help/prepare-database-upload.html>`__
@@ -159,16 +165,17 @@ For example, if the path to your copy of the CodeQL repository is
 
    .. container:: name
 
-      **Information for macOS "Catalina" users**
+      **Information for macOS "Catalina" (or newer) users**
 
    .. pull-quote:: macOS "Catalina"
    
-      macOS "Catalina" users should run the following commands in the Terminal,
-      where ``${install_loc}`` is the path to the directory you created in step 2:
+      macOS "Catalina", "Big Sur", or "Monterey" users should run the following 
+      commands in the Terminal, where ``${install_loc}`` is the path to the 
+      directory you created in step 2:
    
       i. ``mv ~/Downloads/codeql*.zip ${install_loc}``
       ii. ``cd ${install_loc}``
-      iii. ``xattr -c codeql*.zip``
+      iii. ``/usr/bin/xattr -c codeql*.zip``
       iv. ``unzip codeql*.zip``
    
 5. Launch ``codeql``

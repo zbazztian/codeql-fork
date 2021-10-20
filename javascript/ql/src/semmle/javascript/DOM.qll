@@ -291,10 +291,33 @@ module DOM {
      */
     abstract class Range extends DataFlow::Node { }
 
+    private predicate isDomElementType(ExternalType type) { isDomRootType(type.getASupertype*()) }
+
     private string getADomPropertyName() {
       exists(ExternalInstanceMemberDecl decl |
         result = decl.getName() and
-        isDomRootType(decl.getDeclaringType().getASupertype*())
+        isDomElementType(decl.getDeclaringType())
+      )
+    }
+
+    private predicate isDomElementTypeName(string name) {
+      exists(ExternalType type |
+        isDomElementType(type) and
+        name = type.getName()
+      )
+    }
+
+    /** Gets a method name which, if invoked on a DOM element (possibly of a specific subtype), returns a DOM element. */
+    private string getAMethodProducingDomElements() {
+      exists(ExternalInstanceMemberDecl decl |
+        result = decl.getName() and
+        isDomElementType(decl.getDeclaringType()) and
+        isDomElementTypeName(decl.getDocumentation()
+              .getATagByTitle("return")
+              .getType()
+              .getAnUnderlyingType()
+              .(JSDocNamedTypeExpr)
+              .getName())
       )
     }
 
@@ -313,6 +336,11 @@ module DOM {
         read.mayHavePropertyName(_) and
         not read.mayHavePropertyName(getADomPropertyName())
       )
+    }
+
+    private InferredType getArgumentTypeFromJQueryMethodGet(JQuery::MethodCall call) {
+      call.getMethodName() = "get" and
+      result = call.getArgument(0).analyze().getAType()
     }
 
     private class DefaultRange extends Range {
@@ -334,6 +362,8 @@ module DOM {
         or
         this = domElementCollection()
         or
+        this = domValueRef().getAMethodCall(getAMethodProducingDomElements())
+        or
         this = forms()
         or
         // reading property `foo` - where a child has `name="foo"` - resolves to that child.
@@ -344,7 +374,7 @@ module DOM {
         or
         exists(JQuery::MethodCall call | this = call and call.getMethodName() = "get" |
           call.getNumArgument() = 1 and
-          forex(InferredType t | t = call.getArgument(0).analyze().getAType() | t = TTNumber())
+          unique(InferredType t | t = getArgumentTypeFromJQueryMethodGet(call)) = TTNumber()
         )
         or
         // A `this` node from a callback given to a `$().each(callback)` call.
@@ -353,6 +383,21 @@ module DOM {
           this = DataFlow::thisNode(eachCall.getCallback(0).getFunction()) or
           this = eachCall.getABoundCallbackParameter(0, 1)
         )
+        or
+        // A receiver node of an event handler on a DOM node
+        exists(DataFlow::SourceNode domNode, DataFlow::FunctionNode eventHandler |
+          // NOTE: we do not use `getABoundFunctionValue()`, since bound functions tend to have
+          // a different receiver anyway
+          eventHandler = domNode.getAPropertySource(any(string n | n.matches("on%")))
+          or
+          eventHandler =
+            domNode.getAMethodCall("addEventListener").getArgument(1).getAFunctionValue()
+        |
+          domNode = domValueRef() and
+          this = eventHandler.getReceiver()
+        )
+        or
+        this = DataFlow::thisNode(any(EventHandlerCode evt))
       }
     }
   }
@@ -449,6 +494,9 @@ module DOM {
     t.start() and
     result = locationSource()
     or
+    t.startInProp("location") and
+    result = [DataFlow::globalObjectRef(), documentSource()]
+    or
     exists(DataFlow::TypeTracker t2 | result = locationRef(t2).track(t2, t))
   }
 
@@ -490,5 +538,12 @@ module DOM {
     result = documentRef(DataFlow::TypeTracker::end())
     or
     result.hasUnderlyingType("Document")
+  }
+
+  /**
+   * Holds if a value assigned to property `name` of a DOM node can be interpreted as JavaScript via the `javascript:` protocol.
+   */
+  string getAPropertyNameInterpretedAsJavaScriptUrl() {
+    result = ["action", "formaction", "href", "src", "data"]
   }
 }

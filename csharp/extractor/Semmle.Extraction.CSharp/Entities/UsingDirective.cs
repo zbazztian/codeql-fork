@@ -42,19 +42,17 @@ namespace Semmle.Extraction.CSharp.Entities
             else
             {
                 // A "using static"
-                var m = Type.Create(Context, (ITypeSymbol)info.Symbol);
+                var m = Type.Create(Context, (ITypeSymbol?)info.Symbol);
                 trapFile.using_static_directives(this, m.TypeRef);
                 trapFile.using_directive_location(this, Context.CreateLocation(ReportingLocation));
             }
 
-            if (parent != null)
+            if (parent is not null)
             {
                 trapFile.parent_namespace_declaration(this, parent);
             }
         }
 
         public sealed override Microsoft.CodeAnalysis.Location ReportingLocation => node.GetLocation();
-
-        public override TrapStackBehaviour TrapStackBehaviour => TrapStackBehaviour.NoLabel;
     }
 }

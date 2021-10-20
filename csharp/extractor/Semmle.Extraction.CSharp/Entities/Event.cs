@@ -10,9 +10,9 @@ namespace Semmle.Extraction.CSharp.Entities
         private Event(Context cx, IEventSymbol init)
             : base(cx, init) { }
 
-        public override void WriteId(TextWriter trapFile)
+        public override void WriteId(EscapingTextWriter trapFile)
         {
-            trapFile.WriteSubId(ContainingType);
+            trapFile.WriteSubId(ContainingType!);
             trapFile.Write('.');
             Method.AddExplicitInterfaceQualifierToId(Context, trapFile, Symbol.ExplicitInterfaceImplementations);
             trapFile.Write(Symbol.Name);
@@ -24,7 +24,7 @@ namespace Semmle.Extraction.CSharp.Entities
             PopulateNullability(trapFile, Symbol.GetAnnotatedType());
 
             var type = Type.Create(Context, Symbol.Type);
-            trapFile.events(this, Symbol.GetName(), ContainingType, type.TypeRef, Create(Context, Symbol.OriginalDefinition));
+            trapFile.events(this, Symbol.GetName(), ContainingType!, type.TypeRef, Create(Context, Symbol.OriginalDefinition));
 
             var adder = Symbol.AddMethod;
             var remover = Symbol.RemoveMethod;
@@ -47,7 +47,7 @@ namespace Semmle.Extraction.CSharp.Entities
                 trapFile.explicitly_implements(this, explicitInterface.TypeRef);
 
                 foreach (var syntax in declSyntaxReferences.OfType<EventDeclarationSyntax>())
-                    TypeMention.Create(Context, syntax.ExplicitInterfaceSpecifier.Name, this, explicitInterface);
+                    TypeMention.Create(Context, syntax.ExplicitInterfaceSpecifier!.Name, this, explicitInterface);
             }
 
             foreach (var l in Locations)
@@ -71,7 +71,5 @@ namespace Semmle.Extraction.CSharp.Entities
 
             public override Event Create(Context cx, IEventSymbol init) => new Event(cx, init);
         }
-
-        public override TrapStackBehaviour TrapStackBehaviour => TrapStackBehaviour.NoLabel;
     }
 }

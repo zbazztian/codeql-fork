@@ -8,6 +8,7 @@
 
 private import javascript
 private import semmle.javascript.dataflow.TypeTracking
+private import semmle.javascript.internal.CachedStages
 
 /**
  * A source node for local data flow, that is, a node from which local data flow is tracked.
@@ -33,7 +34,11 @@ private import semmle.javascript.dataflow.TypeTracking
  * ```
  */
 class SourceNode extends DataFlow::Node {
-  SourceNode() { this instanceof SourceNode::Range }
+  SourceNode() {
+    this instanceof SourceNode::Range
+    or
+    none() and this instanceof SourceNode::Internal::RecursionGuard
+  }
 
   /**
    * Holds if this node flows into `sink` in zero or more local (that is,
@@ -46,6 +51,11 @@ class SourceNode extends DataFlow::Node {
    * intra-procedural) steps.
    */
   predicate flowsToExpr(Expr sink) { flowsTo(DataFlow::valueNode(sink)) }
+
+  /**
+   * Gets a node into which data may flow from this node in zero or more local steps.
+   */
+  DataFlow::Node getALocalUse() { flowsTo(result) }
 
   /**
    * Gets a reference (read or write) of property `propName` on this node.
@@ -220,6 +230,7 @@ private module Cached {
    */
   cached
   predicate namedPropRef(DataFlow::SourceNode base, string prop, DataFlow::PropRef ref) {
+    Stages::DataFlowStage::ref() and
     hasLocalSource(ref.getBase(), base) and
     ref.getPropertyName() = prop
   }
@@ -310,7 +321,8 @@ module SourceNode {
         astNode instanceof ImportMetaExpr or
         astNode instanceof TaggedTemplateExpr or
         astNode instanceof Angular2::PipeRefExpr or
-        astNode instanceof Angular2::TemplateVarRefExpr
+        astNode instanceof Angular2::TemplateVarRefExpr or
+        astNode instanceof StringLiteral
       )
       or
       DataFlow::parameterNode(this, _)
@@ -327,7 +339,62 @@ module SourceNode {
       DataFlow::functionReturnNode(this, _)
     }
   }
+
+  /** INTERNAL. DO NOT USE. */
+  module Internal {
+    /** An empty class that some tests are using to enforce that SourceNode is non-recursive. */
+    abstract class RecursionGuard extends DataFlow::Node { }
+  }
 }
+
+private class NodeModuleSourcesNodes extends SourceNode::Range {
+  Variable v;
+
+  NodeModuleSourcesNodes() {
+    exists(NodeModule m |
+      this = DataFlow::ssaDefinitionNode(SSA::implicitInit(v)) and
+      v = [m.getModuleVariable(), m.getExportsVariable()]
+    )
+  }
+
+  Variable getVariable() { result = v }
+}
+
+/**
+ * A CommonJS/AMD `module` variable.
+ */
+private class ModuleVarNode extends DataFlow::Node {
+  Module m;
+
+  ModuleVarNode() {
+    this.(NodeModuleSourcesNodes).getVariable() = m.(NodeModule).getModuleVariable()
+    or
+    DataFlow::parameterNode(this, m.(AmdModule).getDefine().getModuleParameter())
+  }
+
+  Module getModule() { result = m }
+}
+
+/**
+ * A CommonJS/AMD `exports` variable.
+ */
+private class ExportsVarNode extends DataFlow::Node {
+  Module m;
+
+  ExportsVarNode() {
+    this.(NodeModuleSourcesNodes).getVariable() = m.(NodeModule).getExportsVariable()
+    or
+    DataFlow::parameterNode(this, m.(AmdModule).getDefine().getExportsParameter())
+  }
+
+  Module getModule() { result = m }
+}
+
+/** Gets the CommonJS/AMD `module` variable for module `m`. */
+SourceNode moduleVarNode(Module m) { result.(ModuleVarNode).getModule() = m }
+
+/** Gets the CommonJS/AMD `exports` variable for module `m`. */
+SourceNode exportsVarNode(Module m) { result.(ExportsVarNode).getModule() = m }
 
 deprecated class DefaultSourceNode extends SourceNode {
   DefaultSourceNode() { this instanceof SourceNode::DefaultRange }

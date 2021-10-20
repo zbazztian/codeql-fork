@@ -15,7 +15,7 @@ namespace Semmle.Extraction.CIL.Entities
         protected IGenericContext gc;
         protected MethodSignature<ITypeSignature> signature;
 
-        protected Method(IGenericContext gc) : base(gc.Cx)
+        protected Method(IGenericContext gc) : base(gc.Context)
         {
             this.gc = gc;
         }
@@ -25,7 +25,7 @@ namespace Semmle.Extraction.CIL.Entities
         public override IEnumerable<Type> TypeParameters => gc.TypeParameters.Concat(DeclaringType.TypeParameters);
 
         public override IEnumerable<Type> MethodParameters =>
-            genericParams == null ? gc.MethodParameters : gc.MethodParameters.Concat(genericParams);
+            genericParams is null ? gc.MethodParameters : gc.MethodParameters.Concat(genericParams);
 
         public int GenericParameterCount => signature.GenericParameterCount;
 
@@ -37,17 +37,15 @@ namespace Semmle.Extraction.CIL.Entities
         public virtual IList<LocalVariable>? LocalVariables => throw new NotImplementedException();
         public IList<Parameter>? Parameters { get; protected set; }
 
-        public override void WriteId(TextWriter trapFile) => WriteMethodId(trapFile, DeclaringType, NameLabel);
-
         public abstract string NameLabel { get; }
 
-        protected internal void WriteMethodId(TextWriter trapFile, Type parent, string methodName)
+        public override void WriteId(EscapingTextWriter trapFile)
         {
             signature.ReturnType.WriteId(trapFile, this);
             trapFile.Write(' ');
-            parent.WriteId(trapFile);
+            DeclaringType.WriteId(trapFile);
             trapFile.Write('.');
-            trapFile.Write(methodName);
+            trapFile.Write(NameLabel);
 
             if (signature.GenericParameterCount > 0)
             {
@@ -61,10 +59,8 @@ namespace Semmle.Extraction.CIL.Entities
                 trapFile.WriteSeparator(",", ref index);
                 param.WriteId(trapFile, this);
             }
-            trapFile.Write(')');
+            trapFile.Write(");cil-method");
         }
-
-        public override string IdSuffix => ";cil-method";
 
         protected IEnumerable<IExtractionProduct> PopulateFlags
         {
@@ -83,10 +79,10 @@ namespace Semmle.Extraction.CIL.Entities
 
             if (!IsStatic)
             {
-                yield return Cx.Populate(new Parameter(Cx, this, i++, DeclaringType));
+                yield return Context.Populate(new Parameter(Context, this, i++, DeclaringType));
             }
 
-            foreach (var p in GetParameterExtractionProducts(parameterTypes, this, this, Cx, i))
+            foreach (var p in GetParameterExtractionProducts(parameterTypes, this, this, Context, i))
             {
                 yield return p;
             }

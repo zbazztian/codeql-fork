@@ -100,3 +100,46 @@ def internal():
             pass
 
     int_instance = IntMyView() #$ use=moduleImport("pflask").getMember("views").getMember("View").getASubclass().getReturn()
+
+
+# Built-ins
+
+def use_of_builtins():
+    for x in range(5): #$ use=moduleImport("builtins").getMember("range").getReturn()
+        if x < len([]): #$ use=moduleImport("builtins").getMember("len").getReturn()
+            print("Hello") #$ use=moduleImport("builtins").getMember("print").getReturn()
+            raise Exception("Farewell") #$ use=moduleImport("builtins").getMember("Exception").getReturn()
+
+def imported_builtins():
+    import builtins #$ use=moduleImport("builtins")
+    def open(f):
+        return builtins.open(f) #$ MISSING: use=moduleImport("builtins").getMember("open").getReturn()
+
+def redefine_print():
+    def my_print(x):
+        import builtins #$ use=moduleImport("builtins")
+        builtins.print("I'm printing", x) #$ use=moduleImport("builtins").getMember("print").getReturn()
+    print = my_print
+    print("these words")
+
+def local_redefine_chr():
+    chr = 5
+    return chr
+
+def global_redefine_chr():
+    global chr
+    chr = 6
+    return chr
+
+def what_is_chr_now():
+    # If global_redefine_chr has been run, then the following is _not_ a reference to the built-in chr
+    return chr(123) #$ MISSING: use=moduleImport("builtins").getMember("chr").getReturn()
+
+def obscured_print():
+    p = print #$ use=moduleImport("builtins").getMember("print")
+    p("Can you see me?") #$ use=moduleImport("builtins").getMember("print").getReturn()
+
+def python2_style():
+    # In Python 3, `__builtin__` has no special meaning.
+    from __builtin__ import open #$ use=moduleImport("__builtin__").getMember("open")
+    open("hello.txt") #$ use=moduleImport("__builtin__").getMember("open").getReturn()

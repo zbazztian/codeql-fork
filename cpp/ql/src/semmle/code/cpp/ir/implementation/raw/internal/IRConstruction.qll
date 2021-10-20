@@ -194,6 +194,8 @@ predicate getIntervalUpdatedByChi(ChiInstruction chi, int startBit, int endBit) 
  */
 predicate getUsedInterval(Operand operand, int startBit, int endBit) { none() }
 
+predicate chiOnlyPartiallyUpdatesLocation(ChiInstruction chi) { none() }
+
 /** Gets a non-phi instruction that defines an operand of `instr`. */
 private Instruction getNonPhiOperandDef(Instruction instr) {
   result = getRegisterOperandDefinition(instr, _)
@@ -358,8 +360,8 @@ CppType getInstructionResultType(TStageInstruction instr) {
   getInstructionTranslatedElement(instr).hasInstruction(_, getInstructionTag(instr), result)
 }
 
-Opcode getInstructionOpcode(TStageInstruction instr) {
-  getInstructionTranslatedElement(instr).hasInstruction(result, getInstructionTag(instr), _)
+predicate getInstructionOpcode(Opcode opcode, TStageInstruction instr) {
+  getInstructionTranslatedElement(instr).hasInstruction(opcode, getInstructionTag(instr), _)
 }
 
 IRFunctionBase getInstructionEnclosingIRFunction(TStageInstruction instr) {

@@ -11,7 +11,10 @@ private import semmle.code.java.frameworks.spring.SpringController
 private import semmle.code.java.frameworks.spring.SpringHttp
 private import semmle.code.java.frameworks.Networking
 private import semmle.code.java.dataflow.ExternalFlow
+private import semmle.code.java.dataflow.internal.DataFlowPrivate
 import semmle.code.java.dataflow.FlowSteps
+private import FlowSummaryImpl as FlowSummaryImpl
+private import semmle.code.java.frameworks.JaxWS
 
 /**
  * Holds if taint can flow from `src` to `sink` in zero or more
@@ -27,51 +30,101 @@ predicate localExprTaint(Expr src, Expr sink) {
   localTaint(DataFlow::exprNode(src), DataFlow::exprNode(sink))
 }
 
-/**
- * Holds if taint can flow in one local step from `src` to `sink`.
- */
-predicate localTaintStep(DataFlow::Node src, DataFlow::Node sink) {
-  DataFlow::localFlowStep(src, sink) or
-  localAdditionalTaintStep(src, sink)
+cached
+private module Cached {
+  private import DataFlowImplCommon as DataFlowImplCommon
+
+  cached
+  predicate forceCachingInSameStage() { DataFlowImplCommon::forceCachingInSameStage() }
+
+  /**
+   * Holds if taint can flow in one local step from `src` to `sink`.
+   */
+  cached
+  predicate localTaintStep(DataFlow::Node src, DataFlow::Node sink) {
+    DataFlow::localFlowStep(src, sink) or
+    localAdditionalTaintStep(src, sink) or
+    // Simple flow through library code is included in the exposed local
+    // step relation, even though flow is technically inter-procedural
+    FlowSummaryImpl::Private::Steps::summaryThroughStep(src, sink, false)
+  }
+
+  /**
+   * Holds if taint can flow in one local step from `src` to `sink` excluding
+   * local data flow steps. That is, `src` and `sink` are likely to represent
+   * different objects.
+   */
+  cached
+  predicate localAdditionalTaintStep(DataFlow::Node src, DataFlow::Node sink) {
+    localAdditionalTaintExprStep(src.asExpr(), sink.asExpr())
+    or
+    localAdditionalTaintUpdateStep(src.asExpr(),
+      sink.(DataFlow::PostUpdateNode).getPreUpdateNode().asExpr())
+    or
+    exists(DataFlow::Content f |
+      readStep(src, f, sink) and
+      not sink.getTypeBound() instanceof PrimitiveType and
+      not sink.getTypeBound() instanceof BoxedType and
+      not sink.getTypeBound() instanceof NumberType
+    |
+      f instanceof DataFlow::ArrayContent or
+      f instanceof DataFlow::CollectionContent or
+      f instanceof DataFlow::MapKeyContent or
+      f instanceof DataFlow::MapValueContent
+    )
+    or
+    FlowSummaryImpl::Private::Steps::summaryLocalStep(src, sink, false)
+  }
+
+  /**
+   * Holds if the additional step from `src` to `sink` should be included in all
+   * global taint flow configurations.
+   */
+  cached
+  predicate defaultAdditionalTaintStep(DataFlow::Node src, DataFlow::Node sink) {
+    localAdditionalTaintStep(src, sink) or
+    any(AdditionalTaintStep a).step(src, sink)
+  }
+
+  /**
+   * Holds if `node` should be a sanitizer in all global taint flow configurations
+   * but not in local taint.
+   */
+  cached
+  predicate defaultTaintSanitizer(DataFlow::Node node) {
+    // Ignore paths through test code.
+    node.getEnclosingCallable().getDeclaringType() instanceof NonSecurityTestClass or
+    node.asExpr() instanceof ValidatedVariableAccess
+  }
+}
+
+import Cached
+
+private RefType getElementType(RefType container) {
+  result = container.(Array).getComponentType() or
+  result = container.(CollectionType).getElementType() or
+  result = container.(MapType).getValueType()
 }
 
 /**
- * Holds if taint can flow in one local step from `src` to `sink` excluding
- * local data flow steps. That is, `src` and `sink` are likely to represent
- * different objects.
+ * Holds if default `TaintTracking::Configuration`s should allow implicit reads
+ * of `c` at sinks and inputs to additional taint steps.
  */
-predicate localAdditionalTaintStep(DataFlow::Node src, DataFlow::Node sink) {
-  localAdditionalTaintExprStep(src.asExpr(), sink.asExpr())
-  or
-  localAdditionalTaintUpdateStep(src.asExpr(),
-    sink.(DataFlow::PostUpdateNode).getPreUpdateNode().asExpr())
-  or
-  summaryStep(src, sink, "taint")
-  or
-  exists(Argument arg |
-    src.asExpr() = arg and
-    arg.isVararg() and
-    sink.(DataFlow::ImplicitVarargsArray).getCall() = arg.getCall()
+bindingset[node]
+predicate defaultImplicitTaintRead(DataFlow::Node node, DataFlow::Content c) {
+  exists(RefType container |
+    (node.asExpr() instanceof Argument or node instanceof ArgumentNode) and
+    getElementType*(node.getType()) = container
+  |
+    container instanceof Array and
+    c instanceof DataFlow::ArrayContent
+    or
+    container instanceof CollectionType and
+    c instanceof DataFlow::CollectionContent
+    or
+    container instanceof MapType and
+    c instanceof DataFlow::MapValueContent
   )
-}
-
-/**
- * Holds if the additional step from `src` to `sink` should be included in all
- * global taint flow configurations.
- */
-predicate defaultAdditionalTaintStep(DataFlow::Node src, DataFlow::Node sink) {
-  localAdditionalTaintStep(src, sink) or
-  any(AdditionalTaintStep a).step(src, sink)
-}
-
-/**
- * Holds if `node` should be a sanitizer in all global taint flow configurations
- * but not in local taint.
- */
-predicate defaultTaintSanitizer(DataFlow::Node node) {
-  // Ignore paths through test code.
-  node.getEnclosingCallable().getDeclaringType() instanceof NonSecurityTestClass or
-  node.asExpr() instanceof ValidatedVariableAccess
 }
 
 /**
@@ -84,21 +137,7 @@ private predicate localAdditionalTaintExprStep(Expr src, Expr sink) {
   or
   sink.(AssignAddExpr).getSource() = src and sink.getType() instanceof TypeString
   or
-  sink.(ArrayCreationExpr).getInit() = src
-  or
-  sink.(ArrayInit).getAnInit() = src
-  or
-  sink.(ArrayAccess).getArray() = src
-  or
   sink.(LogicExpr).getAnOperand() = src
-  or
-  exists(EnhancedForStmt for, SsaExplicitUpdate v |
-    for.getExpr() = src and
-    v.getDefiningExpr() = for.getVariable() and
-    v.getAFirstUse() = sink
-  )
-  or
-  containerReturnValueStep(src, sink)
   or
   constructorStep(src, sink)
   or
@@ -122,12 +161,6 @@ private predicate localAdditionalTaintExprStep(Expr src, Expr sink) {
  * This is restricted to cases where the step updates the value of `sink`.
  */
 private predicate localAdditionalTaintUpdateStep(Expr src, Expr sink) {
-  exists(Assignment assign | assign.getSource() = src |
-    sink = assign.getDest().(ArrayAccess).getArray()
-  )
-  or
-  containerUpdateStep(src, sink)
-  or
   qualifierToArgumentStep(src, sink)
   or
   argToArgStep(src, sink)
@@ -165,60 +198,6 @@ private predicate inputStreamWrapper(Constructor c, int argi) {
 /** An object construction that preserves the data flow status of any of its arguments. */
 private predicate constructorStep(Expr tracked, ConstructorCall sink) {
   exists(int argi | sink.getArgument(argi) = tracked |
-    exists(string s | sink.getConstructedType().getQualifiedName() = s |
-      // some readers preserve the content of streams
-      s = "java.io.InputStreamReader" and argi = 0
-      or
-      s = "java.io.BufferedReader" and argi = 0
-      or
-      s = "java.io.CharArrayReader" and argi = 0
-      or
-      s = "java.io.StringReader" and argi = 0
-      or
-      // data preserved through streams
-      s = "java.io.ObjectInputStream" and argi = 0
-      or
-      s = "java.io.ByteArrayInputStream" and argi = 0
-      or
-      s = "java.io.DataInputStream" and argi = 0
-      or
-      s = "java.io.BufferedInputStream" and argi = 0
-      or
-      s = "com.esotericsoftware.kryo.io.Input" and argi = 0
-      or
-      s = "java.beans.XMLDecoder" and argi = 0
-      or
-      // a tokenizer preserves the content of a string
-      s = "java.util.StringTokenizer" and argi = 0
-      or
-      // unzipping the stream preserves content
-      s = "java.util.zip.ZipInputStream" and argi = 0
-      or
-      s = "java.util.zip.GZIPInputStream" and argi = 0
-      or
-      // a cookie with tainted ingredients is tainted
-      s = "javax.servlet.http.Cookie" and argi = 0
-      or
-      s = "javax.servlet.http.Cookie" and argi = 1
-      or
-      // various xml stream source constructors.
-      s = "org.xml.sax.InputSource" and argi = 0
-      or
-      s = "javax.xml.transform.sax.SAXSource" and argi = 0 and sink.getNumArgument() = 1
-      or
-      s = "javax.xml.transform.sax.SAXSource" and argi = 1 and sink.getNumArgument() = 2
-      or
-      s = "javax.xml.transform.stream.StreamSource" and argi = 0
-      or
-      //a URI constructed from a tainted string is tainted.
-      s = "java.net.URI" and argi = 0 and sink.getNumArgument() = 1
-      or
-      //a File constructed from a tainted string is tainted.
-      s = "java.io.File" and argi = 0
-      or
-      s = "java.io.File" and argi = 1
-    )
-    or
     // wrappers constructed by extension
     exists(Constructor c, Parameter p, SuperConstructorInvocationStmt sup |
       c = sink.getConstructor() and
@@ -229,22 +208,6 @@ private predicate constructorStep(Expr tracked, ConstructorCall sink) {
     or
     // a custom InputStream that wraps a tainted data source is tainted
     inputStreamWrapper(sink.getConstructor(), argi)
-    or
-    // A SpringHttpEntity is a wrapper around a body and some headers
-    // Track flow through iff body is a String
-    exists(SpringHttpEntity she |
-      sink.getConstructor() = she.getAConstructor() and
-      argi = 0 and
-      tracked.getType() instanceof TypeString
-    )
-    or
-    // A SpringRequestEntity is a wrapper around a body and some headers
-    // Track flow through iff body is a String
-    exists(SpringResponseEntity sre |
-      sink.getConstructor() = sre.getAConstructor() and
-      argi = 0 and
-      tracked.getType() instanceof TypeString
-    )
     or
     sink.getConstructor().(TaintPreservingCallable).returnsTaintFrom(argToParam(sink, argi))
   )
@@ -266,30 +229,10 @@ private int argToParam(Call call, int arg) {
 /** Access to a method that passes taint from qualifier to argument. */
 private predicate qualifierToArgumentStep(Expr tracked, Expr sink) {
   exists(MethodAccess ma, int arg |
-    taintPreservingQualifierToArgument(ma.getMethod(), argToParam(ma, arg)) and
+    ma.getMethod().(TaintPreservingCallable).transfersTaint(-1, argToParam(ma, arg)) and
     tracked = ma.getQualifier() and
     sink = ma.getArgument(arg)
   )
-}
-
-/** Methods that passes tainted data from qualifier to argument. */
-private predicate taintPreservingQualifierToArgument(Method m, int arg) {
-  m.getDeclaringType().hasQualifiedName("java.io", "ByteArrayOutputStream") and
-  m.hasName("writeTo") and
-  arg = 0
-  or
-  exists(Method read |
-    m.overrides*(read) and
-    read.getDeclaringType().hasQualifiedName("java.io", "InputStream") and
-    read.hasName("read") and
-    arg = 0
-  )
-  or
-  m.getDeclaringType().getASupertype*().hasQualifiedName("java.io", "Reader") and
-  m.hasName("read") and
-  arg = 0
-  or
-  m.(TaintPreservingCallable).transfersTaint(-1, arg)
 }
 
 /** Access to a method that passes taint from the qualifier. */
@@ -304,13 +247,6 @@ private predicate qualifierToMethodStep(Expr tracked, MethodAccess sink) {
 private predicate taintPreservingQualifierToMethod(Method m) {
   m instanceof CloneMethod
   or
-  m.getDeclaringType().getASupertype*().hasQualifiedName("java.io", "Reader") and
-  (
-    m.getName() = "read" and m.getNumberOfParameters() = 0
-    or
-    m.getName() = "readLine"
-  )
-  or
   m.getDeclaringType().getQualifiedName().matches("%StringWriter") and
   (
     m.getName() = "getBuffer"
@@ -318,54 +254,18 @@ private predicate taintPreservingQualifierToMethod(Method m) {
     m.getName() = "toString"
   )
   or
-  m.getDeclaringType().hasQualifiedName("java.util", "StringTokenizer") and
-  m.getName().matches("next%")
-  or
-  m.getDeclaringType().hasQualifiedName("java.io", "ByteArrayOutputStream") and
-  (m.getName() = "toByteArray" or m.getName() = "toString")
-  or
   m.getDeclaringType().hasQualifiedName("java.io", "ObjectInputStream") and
   m.getName().matches("read%")
-  or
-  m.getDeclaringType().hasQualifiedName("javax.xml.transform.sax", "SAXSource") and
-  m.hasName("getInputSource")
-  or
-  m.getDeclaringType().hasQualifiedName("javax.xml.transform.stream", "StreamSource") and
-  m.hasName("getInputStream")
-  or
-  m.getDeclaringType().hasQualifiedName("java.nio", "ByteBuffer") and
-  m.hasName("get")
-  or
-  m.getDeclaringType() instanceof TypeFile and
-  m.hasName("toPath")
-  or
-  m.getDeclaringType() instanceof TypePath and
-  m.hasName("toFile")
-  or
-  m.getDeclaringType() instanceof TypeFile and
-  m.hasName("toURI")
-  or
-  m.getDeclaringType() instanceof TypeUri and
-  m.hasName("toURL")
   or
   m instanceof GetterMethod and
   m.getDeclaringType().getASubtype*() instanceof SpringUntrustedDataType and
   not m.getDeclaringType() instanceof TypeObject
   or
-  m.getDeclaringType() instanceof SpringHttpEntity and
-  m.getName().regexpMatch("getBody|getHeaders")
-  or
-  exists(SpringHttpHeaders headers | m = headers.getAMethod() |
-    m.getReturnType() instanceof TypeString
-    or
-    exists(ParameterizedType stringlist |
-      m.getReturnType().(RefType).getASupertype*() = stringlist and
-      stringlist.getSourceDeclaration().hasQualifiedName("java.util", "List") and
-      stringlist.getTypeArgument(0) instanceof TypeString
-    )
-  )
-  or
   m.(TaintPreservingCallable).returnsTaintFrom(-1)
+  or
+  exists(JaxRsResourceMethod resourceMethod |
+    m.(GetterMethod).getDeclaringType() = resourceMethod.getAParameter().getType()
+  )
 }
 
 private class StringReplaceMethod extends TaintPreservingCallable {
@@ -420,68 +320,12 @@ private predicate argToMethodStep(Expr tracked, MethodAccess sink) {
  * `arg`th argument is tainted.
  */
 private predicate taintPreservingArgumentToMethod(Method method, int arg) {
-  (
-    method.getDeclaringType().hasQualifiedName("java.util", "Base64$Encoder") or
-    method.getDeclaringType().hasQualifiedName("java.util", "Base64$Decoder") or
-    method
-        .getDeclaringType()
-        .getASupertype*()
-        .hasQualifiedName("org.apache.commons.codec", "Encoder") or
-    method
-        .getDeclaringType()
-        .getASupertype*()
-        .hasQualifiedName("org.apache.commons.codec", "Decoder")
-  ) and
-  (
-    method.getName() = "encode" and arg = 0 and method.getNumberOfParameters() = 1
-    or
-    method.getName() = "decode" and arg = 0 and method.getNumberOfParameters() = 1
-    or
-    method.getName() = "encodeToString" and arg = 0
-    or
-    method.getName() = "wrap" and arg = 0
-  )
-  or
   method.getDeclaringType().hasQualifiedName("org.apache.commons.codec.binary", "Base64") and
   (
     method.getName() = "decodeBase64" and arg = 0
     or
     method.getName().matches("encodeBase64%") and arg = 0
   )
-  or
-  method.getDeclaringType().hasQualifiedName("org.apache.commons.io", "IOUtils") and
-  (
-    method.getName() = "buffer" and arg = 0
-    or
-    method.getName() = "readLines" and arg = 0
-    or
-    method.getName() = "readFully" and arg = 0 and method.getParameterType(1).hasName("int")
-    or
-    method.getName() = "toBufferedInputStream" and arg = 0
-    or
-    method.getName() = "toBufferedReader" and arg = 0
-    or
-    method.getName() = "toByteArray" and arg = 0
-    or
-    method.getName() = "toCharArray" and arg = 0
-    or
-    method.getName() = "toInputStream" and arg = 0
-    or
-    method.getName() = "toString" and arg = 0
-  )
-  or
-  method.getDeclaringType().hasQualifiedName("java.net", "URLDecoder") and
-  method.hasName("decode") and
-  arg = 0
-  or
-  // A URI created from a tainted string is still tainted.
-  method.getDeclaringType() instanceof TypeUri and
-  method.hasName("create") and
-  arg = 0
-  or
-  method.getDeclaringType().hasQualifiedName("javax.xml.transform.sax", "SAXSource") and
-  method.hasName("sourceToInputSource") and
-  arg = 0
   or
   method.(TaintPreservingCallable).returnsTaintFrom(arg)
 }
@@ -492,46 +336,11 @@ private predicate taintPreservingArgumentToMethod(Method method, int arg) {
  */
 private predicate argToArgStep(Expr tracked, Expr sink) {
   exists(MethodAccess ma, Method method, int input, int output |
-    taintPreservingArgToArg(method, argToParam(ma, input), argToParam(ma, output)) and
+    method.(TaintPreservingCallable).transfersTaint(argToParam(ma, input), argToParam(ma, output)) and
     ma.getMethod() = method and
     ma.getArgument(input) = tracked and
     ma.getArgument(output) = sink
   )
-}
-
-/**
- * Holds if `method` is a library method that writes tainted data to the
- * `output`th argument if the `input`th argument is tainted.
- */
-private predicate taintPreservingArgToArg(Method method, int input, int output) {
-  method.getDeclaringType().hasQualifiedName("org.apache.commons.io", "IOUtils") and
-  (
-    method.hasName("copy") and input = 0 and output = 1
-    or
-    method.hasName("copyLarge") and input = 0 and output = 1
-    or
-    method.hasName("read") and input = 0 and output = 1
-    or
-    method.hasName("readFully") and
-    input = 0 and
-    output = 1 and
-    not method.getParameterType(1).hasName("int")
-    or
-    method.hasName("write") and input = 0 and output = 1
-    or
-    method.hasName("writeChunked") and input = 0 and output = 1
-    or
-    method.hasName("writeLines") and input = 0 and output = 2
-    or
-    method.hasName("writeLines") and input = 1 and output = 2
-  )
-  or
-  method.getDeclaringType().hasQualifiedName("java.lang", "System") and
-  method.hasName("arraycopy") and
-  input = 0 and
-  output = 2
-  or
-  method.(TaintPreservingCallable).transfersTaint(input, output)
 }
 
 /**
@@ -717,10 +526,7 @@ module StringBuilderVarModule {
    * build up a query using string concatenation.
    */
   class StringBuilderVar extends LocalVariableDecl {
-    StringBuilderVar() {
-      this.getType() instanceof TypeStringBuilder or
-      this.getType() instanceof TypeStringBuffer
-    }
+    StringBuilderVar() { getType() instanceof StringBuildingType }
 
     /**
      * Gets a call that adds something to this string builder, from the argument at the given index.

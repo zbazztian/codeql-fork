@@ -34,7 +34,7 @@ module StringConcatenation {
     or
     exists(DataFlow::ArrayCreationNode array, DataFlow::MethodCallNode call |
       call = array.getAMethodCall("join") and
-      call.getArgument(0).mayHaveStringValue("") and
+      (call.getArgument(0).mayHaveStringValue("") or call.getNumArgument() = 0) and
       (
         // step from array element to array
         result = array.getElement(n) and
@@ -55,12 +55,8 @@ module StringConcatenation {
     exists(DataFlow::MethodCallNode call |
       node = call and
       call.getMethodName() = "concat" and
-      not (
-        exists(DataFlow::ArrayCreationNode array |
-          array.flowsTo(call.getAnArgument()) or array.flowsTo(call.getReceiver())
-        )
-        or
-        DataFlow::reflectiveCallNode(_) = call
+      not exists(DataFlow::ArrayCreationNode array |
+        array.flowsTo(call.getAnArgument()) or array.flowsTo(call.getReceiver())
       ) and
       (
         n = 0 and

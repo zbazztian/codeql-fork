@@ -28,17 +28,17 @@ module Shared {
   abstract class SanitizerGuard extends TaintTracking::SanitizerGuardNode { }
 
   /**
-   * A regexp replacement involving an HTML meta-character, viewed as a sanitizer for
+   * A global regexp replacement involving the `<`, `'`, or `"` meta-character, viewed as a sanitizer for
    * XSS vulnerabilities.
-   *
-   * The XSS queries do not attempt to reason about correctness or completeness of sanitizers,
-   * so any such replacement stops taint propagation.
    */
   class MetacharEscapeSanitizer extends Sanitizer, StringReplaceCall {
     MetacharEscapeSanitizer() {
-      exists(RegExpConstant c |
-        c.getLiteral() = getRegExp().asExpr() and
-        c.getValue().regexpMatch("['\"&<>]")
+      isGlobal() and
+      (
+        RegExp::alwaysMatchesMetaCharacter(getRegExp().getRoot(), ["<", "'", "\""])
+        or
+        // or it's like a wild-card.
+        RegExp::isWildcardLike(getRegExp().getRoot())
       )
     }
   }
@@ -52,6 +52,17 @@ module Shared {
       exists(string name | this = DataFlow::globalVarRef(name).getACall() |
         name = "encodeURI" or name = "encodeURIComponent"
       )
+    }
+  }
+
+  /**
+   * A call to `serialize-javascript`, which prevents XSS vulnerabilities unless
+   * the `unsafe` option is set to `true`.
+   */
+  class SerializeJavascriptSanitizer extends Sanitizer, DataFlow::CallNode {
+    SerializeJavascriptSanitizer() {
+      this = DataFlow::moduleImport("serialize-javascript").getACall() and
+      not this.getOptionArgument(1, "unsafe").mayHaveBooleanValue(true)
     }
   }
 
@@ -181,6 +192,8 @@ module DomBasedXss {
         this = instance.getArgument(0) and
         instance.getOptionArgument(1, "runScripts").mayHaveStringValue("dangerously")
       )
+      or
+      MooTools::interpretsNodeAsHtml(this)
     }
   }
 
@@ -216,7 +229,7 @@ module DomBasedXss {
       exists(JQuery::MethodCall call |
         call.interpretsArgumentAsHtml(this) and
         call.interpretsArgumentAsSelector(this) and
-        analyze().getAType() = TTString()
+        pragma[only_bind_out](analyze()).getAType() = TTString()
       )
     }
 
@@ -306,6 +319,20 @@ module DomBasedXss {
   }
 
   /**
+   * A React tooltip where the `data-html` attribute is set to `true`.
+   */
+  class TooltipSink extends Sink {
+    TooltipSink() {
+      exists(JSXElement el |
+        el.getAttributeByName("data-html").getStringValue() = "true" or
+        el.getAttributeByName("data-html").getValue().mayHaveBooleanValue(true)
+      |
+        this = el.getAttributeByName("data-tip").getValue().flow()
+      )
+    }
+  }
+
+  /**
    * The HTML body of an email, viewed as an XSS sink.
    */
   class EmailHtmlBodySink extends Sink {
@@ -318,7 +345,10 @@ module DomBasedXss {
    * A write to the `template` option of a Vue instance, viewed as an XSS sink.
    */
   class VueTemplateSink extends DomBasedXss::Sink {
-    VueTemplateSink() { this = any(Vue::Instance i).getTemplate() }
+    VueTemplateSink() {
+      // Note: don't use Vue::Instance#getTemplate as it includes an unwanted getALocalSource() step
+      this = any(Vue::Instance i).getOption("template")
+    }
   }
 
   /**
@@ -337,70 +367,14 @@ module DomBasedXss {
   /**
    * A Vue `v-html` attribute, viewed as an XSS sink.
    */
-  class VHtmlSink extends DomBasedXss::Sink {
-    HTML::Attribute attr;
-
-    VHtmlSink() {
-      this.(DataFlow::HtmlAttributeNode).getAttribute() = attr and attr.getName() = "v-html"
-    }
-
-    /**
-     * Gets the HTML attribute of this sink.
-     */
-    HTML::Attribute getAttr() { result = attr }
-  }
-
-  /**
-   * A taint propagating data flow edge through a string interpolation of a
-   * Vue instance property to a `v-html` attribute.
-   *
-   * As an example, `<div v-html="prop"/>` reads the `prop` property
-   * of `inst = new Vue({ ..., data: { prop: source } })`, if the
-   * `div` element is part of the template for `inst`.
-   */
-  class VHtmlSourceWrite extends TaintTracking::AdditionalTaintStep {
-    VHtmlSink attr;
-
-    VHtmlSourceWrite() {
-      exists(Vue::Instance instance, string expr |
-        attr.getAttr().getRoot() =
-          instance.getTemplateElement().(Vue::Template::HtmlElement).getElement() and
-        expr = attr.getAttr().getValue() and
-        // only support for simple identifier expressions
-        expr.regexpMatch("(?i)[a-z0-9_]+") and
-        this = instance.getAPropertyValue(expr)
-      )
-    }
-
-    override predicate step(DataFlow::Node pred, DataFlow::Node succ) {
-      pred = this and succ = attr
-    }
-  }
+  class VHtmlSink extends Vue::VHtmlAttribute, DomBasedXss::Sink { }
 
   /**
    * A property read from a safe property is considered a sanitizer.
    */
   class SafePropertyReadSanitizer extends Sanitizer, DataFlow::Node {
     SafePropertyReadSanitizer() {
-      exists(PropAccess pacc | pacc = this.asExpr() |
-        isSafeLocationProperty(pacc)
-        or
-        pacc.getPropertyName() = "length"
-      )
-    }
-  }
-
-  /**
-   * A sanitizer that reads the first part a location split by "?", e.g. `location.href.split('?')[0]`.
-   */
-  class QueryPrefixSanitizer extends Sanitizer {
-    StringSplitCall splitCall;
-
-    QueryPrefixSanitizer() {
-      this = splitCall.getASubstringRead(0) and
-      splitCall.getSeparator() = "?" and
-      splitCall.getBaseString().getALocalSource() =
-        [DOM::locationRef(), DOM::locationRef().getAPropertyRead("href")]
+      exists(PropAccess pacc | pacc = this.asExpr() | pacc.getPropertyName() = "length")
     }
   }
 
@@ -414,6 +388,9 @@ module DomBasedXss {
   private class MetacharEscapeSanitizer extends Sanitizer, Shared::MetacharEscapeSanitizer { }
 
   private class UriEncodingSanitizer extends Sanitizer, Shared::UriEncodingSanitizer { }
+
+  private class SerializeJavascriptSanitizer extends Sanitizer, Shared::SerializeJavascriptSanitizer {
+  }
 
   private class IsEscapedInSwitchSanitizer extends Sanitizer, Shared::IsEscapedInSwitchSanitizer { }
 
@@ -553,6 +530,9 @@ module ReflectedXss {
 
   private class UriEncodingSanitizer extends Sanitizer, Shared::UriEncodingSanitizer { }
 
+  private class SerializeJavascriptSanitizer extends Sanitizer, Shared::SerializeJavascriptSanitizer {
+  }
+
   private class IsEscapedInSwitchSanitizer extends Sanitizer, Shared::IsEscapedInSwitchSanitizer { }
 
   private class QuoteGuard extends SanitizerGuard, Shared::QuoteGuard { }
@@ -590,6 +570,9 @@ module StoredXss {
 
   private class UriEncodingSanitizer extends Sanitizer, Shared::UriEncodingSanitizer { }
 
+  private class SerializeJavascriptSanitizer extends Sanitizer, Shared::SerializeJavascriptSanitizer {
+  }
+
   private class IsEscapedInSwitchSanitizer extends Sanitizer, Shared::IsEscapedInSwitchSanitizer { }
 
   private class QuoteGuard extends SanitizerGuard, Shared::QuoteGuard { }
@@ -601,4 +584,62 @@ module StoredXss {
 module XssThroughDom {
   /** A data flow source for XSS through DOM vulnerabilities. */
   abstract class Source extends Shared::Source { }
+}
+
+/** Provides classes for customizing the `ExceptionXss` query. */
+module ExceptionXss {
+  /** A data flow source for XSS caused by interpreting exception or error text as HTML. */
+  abstract class Source extends DataFlow::Node {
+    /**
+     * Gets a flow label to associate with this source.
+     *
+     * For sources that should pass through a `throw/catch` before reaching the sink, use the
+     * `NotYetThrown` labe. Otherwise use `taint` (the default).
+     */
+    DataFlow::FlowLabel getAFlowLabel() { result.isTaint() }
+
+    /**
+     * Gets a human-readable description of what type of error this refers to.
+     *
+     * The result should be capitalized and usable in the context of a noun.
+     */
+    string getDescription() { result = "Error text" }
+  }
+
+  /**
+   * A FlowLabel representing tainted data that has not been thrown in an exception.
+   * In the js/xss-through-exception query data-flow can only reach a sink after
+   * the data has been thrown as an exception, and data that has not been thrown
+   * as an exception therefore has this flow label, and only this flow label, associated with it.
+   */
+  abstract class NotYetThrown extends DataFlow::FlowLabel {
+    NotYetThrown() { this = "NotYetThrown" }
+  }
+
+  private class XssSourceAsSource extends Source {
+    XssSourceAsSource() { this instanceof Shared::Source }
+
+    override DataFlow::FlowLabel getAFlowLabel() { result instanceof NotYetThrown }
+
+    override string getDescription() { result = "Exception text" }
+  }
+
+  /**
+   * An error produced by validating using `ajv`.
+   *
+   * Such an error can contain property names from the input if the
+   * underlying schema uses `additionalProperties` or `propertyPatterns`.
+   *
+   * For example, an input of form `{"<img src=x onerror=alert(1)>": 45}` might produce the error
+   * `data/<img src=x onerror=alert(1)> should be string`.
+   */
+  private class JsonSchemaValidationError extends Source {
+    JsonSchemaValidationError() {
+      this = any(JsonSchema::Ajv::Instance i).getAValidationError().getAnImmediateUse()
+      or
+      this = any(JsonSchema::Joi::JoiValidationErrorRead r).getAValidationResultAccess(_)
+    }
+
+    override string getDescription() { result = "JSON schema validation error" }
+  }
 }

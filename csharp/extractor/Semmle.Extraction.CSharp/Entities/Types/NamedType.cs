@@ -36,7 +36,7 @@ namespace Semmle.Extraction.CSharp.Entities
         {
             if (Symbol.TypeKind == TypeKind.Error)
             {
-                Context.Extractor.MissingType(Symbol.ToString(), Context.FromSource);
+                Context.Extractor.MissingType(Symbol.ToString()!, Context.FromSource);
                 return;
             }
 
@@ -76,7 +76,7 @@ namespace Semmle.Extraction.CSharp.Entities
 
             PopulateType(trapFile, constructUnderlyingTupleType);
 
-            if (Symbol.EnumUnderlyingType != null)
+            if (Symbol.EnumUnderlyingType is not null)
             {
                 trapFile.enum_underlying_type(this, Type.Create(Context, Symbol.EnumUnderlyingType).TypeRef);
             }
@@ -108,7 +108,7 @@ namespace Semmle.Extraction.CSharp.Entities
                 foreach (var l in GetLocations(Symbol))
                     yield return Context.CreateLocation(l);
 
-                if (Context.Extractor.OutputPath != null && Symbol.DeclaringSyntaxReferences.Any())
+                if (!Context.Extractor.Standalone && Symbol.DeclaringSyntaxReferences.Any())
                     yield return Assembly.CreateOutputAssembly(Context);
             }
         }
@@ -124,11 +124,11 @@ namespace Semmle.Extraction.CSharp.Entities
                 );
         }
 
-        public override Microsoft.CodeAnalysis.Location ReportingLocation => GetLocations(Symbol).FirstOrDefault();
+        public override Microsoft.CodeAnalysis.Location? ReportingLocation => GetLocations(Symbol).FirstOrDefault();
 
         private bool IsAnonymousType() => Symbol.IsAnonymousType || Symbol.Name.Contains("__AnonymousType");
 
-        public override void WriteId(TextWriter trapFile)
+        public override void WriteId(EscapingTextWriter trapFile)
         {
             if (IsAnonymousType())
             {
@@ -141,7 +141,7 @@ namespace Semmle.Extraction.CSharp.Entities
             }
         }
 
-        public override void WriteQuotedId(TextWriter trapFile)
+        public sealed override void WriteQuotedId(EscapingTextWriter trapFile)
         {
             if (IsAnonymousType())
                 trapFile.Write('*');
@@ -195,7 +195,7 @@ namespace Semmle.Extraction.CSharp.Entities
 
         public override bool NeedsPopulation => true;
 
-        public override void WriteId(TextWriter trapFile)
+        public override void WriteId(EscapingTextWriter trapFile)
         {
             trapFile.WriteSubId(referencedType);
             trapFile.Write(";typeRef");

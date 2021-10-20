@@ -28,7 +28,7 @@ namespace Semmle.Extraction
     /// An abstract symbol, which encapsulates a data type (such as a C# symbol).
     /// </summary>
     /// <typeparam name="TSymbol">The type of the symbol.</typeparam>
-    public abstract class CachedEntity<TSymbol> : CachedEntity
+    public abstract class CachedEntity<TSymbol> : CachedEntity where TSymbol : notnull
     {
         public TSymbol Symbol { get; }
 
@@ -60,7 +60,7 @@ namespace Semmle.Extraction
             return other?.GetType() == GetType() && Equals(other.Symbol, Symbol);
         }
 
-        public override TrapStackBehaviour TrapStackBehaviour { get; }
+        public override TrapStackBehaviour TrapStackBehaviour => TrapStackBehaviour.NoLabel;
     }
 
     /// <summary>

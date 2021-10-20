@@ -107,13 +107,18 @@ module NodeJSLib {
   }
 
   /**
-   * A Node.js response source, that is, the response parameter of a
+   * A Node.js response source.
+   */
+  abstract class ResponseSource extends HTTP::Servers::ResponseSource { }
+
+  /**
+   * A standard Node.js response source, that is, the response parameter of a
    * route handler.
    */
-  private class ResponseSource extends HTTP::Servers::ResponseSource {
+  private class StandardResponseSource extends ResponseSource {
     RouteHandler rh;
 
-    ResponseSource() { this = DataFlow::parameterNode(rh.getResponseParameter()) }
+    StandardResponseSource() { this = DataFlow::parameterNode(rh.getResponseParameter()) }
 
     /**
      * Gets the route handler that provides this response.
@@ -122,13 +127,18 @@ module NodeJSLib {
   }
 
   /**
-   * A Node.js request source, that is, the request parameter of a
+   * A Node.js request source.
+   */
+  abstract class RequestSource extends HTTP::Servers::RequestSource { }
+
+  /**
+   * A standard Node.js request source, that is, the request parameter of a
    * route handler.
    */
-  private class RequestSource extends HTTP::Servers::RequestSource {
+  private class StandardRequestSource extends RequestSource {
     RouteHandler rh;
 
-    RequestSource() { this = DataFlow::parameterNode(rh.getRequestParameter()) }
+    StandardRequestSource() { this = DataFlow::parameterNode(rh.getRequestParameter()) }
 
     /**
      * Gets the route handler that handles this request.
@@ -281,74 +291,65 @@ module NodeJSLib {
   /**
    * A call to a path-module method that preserves taint.
    */
-  private class PathFlowTarget extends TaintTracking::AdditionalTaintStep, DataFlow::CallNode {
-    DataFlow::Node tainted;
-
-    PathFlowTarget() {
-      exists(string methodName | this = NodeJSLib::Path::moduleMember(methodName).getACall() |
+  private class PathFlowStep extends TaintTracking::SharedTaintStep {
+    override predicate step(DataFlow::Node pred, DataFlow::Node succ) {
+      exists(DataFlow::CallNode call, string methodName |
+        call = NodeJSLib::Path::moduleMember(methodName).getACall() and
+        succ = call
+      |
         // getters
-        methodName = "basename" and tainted = getArgument(0)
+        methodName = "basename" and pred = call.getArgument(0)
         or
-        methodName = "dirname" and tainted = getArgument(0)
+        methodName = "dirname" and pred = call.getArgument(0)
         or
-        methodName = "extname" and tainted = getArgument(0)
+        methodName = "extname" and pred = call.getArgument(0)
         or
         // transformers
-        methodName = "join" and tainted = getAnArgument()
+        methodName = "join" and pred = call.getAnArgument()
         or
-        methodName = "normalize" and tainted = getArgument(0)
+        methodName = "normalize" and pred = call.getArgument(0)
         or
-        methodName = "relative" and tainted = getArgument([0 .. 1])
+        methodName = "relative" and pred = call.getArgument([0 .. 1])
         or
-        methodName = "resolve" and tainted = getAnArgument()
+        methodName = "resolve" and pred = call.getAnArgument()
         or
-        methodName = "toNamespacedPath" and tainted = getArgument(0)
+        methodName = "toNamespacedPath" and pred = call.getArgument(0)
       )
-    }
-
-    override predicate step(DataFlow::Node pred, DataFlow::Node succ) {
-      pred = tainted and succ = this
     }
   }
 
   /**
    * A call to a fs-module method that preserves taint.
    */
-  private class FsFlowTarget extends TaintTracking::AdditionalTaintStep {
-    DataFlow::Node tainted;
-
-    FsFlowTarget() {
+  private class FsFlowStep extends TaintTracking::SharedTaintStep {
+    override predicate step(DataFlow::Node pred, DataFlow::Node succ) {
       exists(DataFlow::CallNode call, string methodName |
         call = FS::moduleMember(methodName).getACall()
       |
         methodName = "realpathSync" and
-        tainted = call.getArgument(0) and
-        this = call
+        pred = call.getArgument(0) and
+        succ = call
         or
         methodName = "realpath" and
-        tainted = call.getArgument(0) and
-        this = call.getCallback(1).getParameter(1)
+        pred = call.getArgument(0) and
+        succ = call.getCallback(1).getParameter(1)
       )
-    }
-
-    override predicate step(DataFlow::Node pred, DataFlow::Node succ) {
-      pred = tainted and succ = this
     }
   }
 
   /**
    * A model of taint propagation through `new Buffer` and `Buffer.from`.
    */
-  private class BufferTaintStep extends TaintTracking::AdditionalTaintStep, DataFlow::InvokeNode {
-    BufferTaintStep() {
-      this = DataFlow::globalVarRef("Buffer").getAnInstantiation()
-      or
-      this = DataFlow::globalVarRef("Buffer").getAMemberInvocation("from")
-    }
-
+  private class BufferTaintStep extends TaintTracking::SharedTaintStep {
     override predicate step(DataFlow::Node pred, DataFlow::Node succ) {
-      pred = getArgument(0) and
-      succ = this
+      exists(DataFlow::InvokeNode invoke |
+        invoke = DataFlow::globalVarRef("Buffer").getAnInstantiation()
+        or
+        invoke = DataFlow::globalVarRef("Buffer").getAMemberInvocation("from")
+      |
+        pred = invoke.getArgument(0) and
+        succ = invoke
+      )
     }
   }
 
@@ -464,18 +465,38 @@ module NodeJSLib {
       ) and
       t.start()
       or
+      t.start() and
+      result = DataFlow::moduleMember("fs", "promises")
+      or
       exists(DataFlow::TypeTracker t2, DataFlow::SourceNode pred | pred = fsModule(t2) |
         result = pred.track(t2, t)
         or
         t.continue() = t2 and
-        exists(DataFlow::CallNode promisifyAllCall |
+        exists(Promisify::PromisifyAllCall promisifyAllCall |
           result = promisifyAllCall and
-          pred.flowsTo(promisifyAllCall.getArgument(0)) and
-          promisifyAllCall =
-            [
-              DataFlow::moduleMember("bluebird", "promisifyAll"),
-              DataFlow::moduleImport("util-promisifyall")
-            ].getACall()
+          pred.flowsTo(promisifyAllCall.getArgument(0))
+        )
+        or
+        // const fs = require('fs');
+        // let fs_copy = methods.reduce((obj, method) => {
+        //  obj[method] = fs[method];
+        //  return obj;
+        // }, {});
+        t.continue() = t2 and
+        exists(
+          DataFlow::MethodCallNode call, DataFlow::ParameterNode obj, DataFlow::SourceNode method
+        |
+          call.getMethodName() = "reduce" and
+          result = call and
+          obj = call.getABoundCallbackParameter(0, 0) and
+          obj.flowsTo(any(DataFlow::FunctionNode f).getAReturn()) and
+          exists(DataFlow::PropWrite write, DataFlow::PropRead read |
+            write = obj.getAPropertyWrite() and
+            method.flowsToExpr(write.getPropertyNameExpr()) and
+            method.flowsToExpr(read.getPropertyNameExpr()) and
+            read.getBase().getALocalSource() = fsModule(t2) and
+            write.getRhs() = maybePromisified(read)
+          )
         )
       )
     }
@@ -622,9 +643,7 @@ module NodeJSLib {
   private DataFlow::SourceNode maybePromisified(DataFlow::SourceNode callback) {
     result = callback
     or
-    exists(DataFlow::CallNode promisify |
-      promisify = DataFlow::moduleMember(["util", "bluebird"], "promisify").getACall()
-    |
+    exists(Promisify::PromisifyCall promisify |
       result = promisify and promisify.getArgument(0).getALocalSource() = callback
     )
   }
@@ -644,8 +663,6 @@ module NodeJSLib {
       )
     }
   }
-
-  private import semmle.javascript.PackageExports as Exports
 
   /**
    * A direct step from an named export to a property-read reading the exported value.

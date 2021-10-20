@@ -6,7 +6,7 @@ import javascript
 
 /**
  * A call to a function that constructs a function composition `f(g(h(...)))` from a
- * series functions `f, g, h, ...`.
+ * series of functions `f, g, h, ...`.
  */
 class FunctionCompositionCall extends DataFlow::CallNode {
   FunctionCompositionCall::Range range;
@@ -35,7 +35,7 @@ class FunctionCompositionCall extends DataFlow::CallNode {
   }
 
   /** Gets any of the functions being composed. */
-  final DataFlow::Node getAnOperandFunction() { result = getOperandFunction(_) }
+  final DataFlow::FunctionNode getAnOperandFunction() { result = getOperandFunction(_) }
 
   /** Gets the number of functions being composed. */
   int getNumOperand() { result = range.getNumOperand() }
@@ -88,7 +88,9 @@ module FunctionCompositionCall {
     RightToLeft() {
       this = DataFlow::moduleImport(["compose-function"]).getACall()
       or
-      this = DataFlow::moduleMember(["redux", "ramda"], "compose").getACall()
+      this =
+        DataFlow::moduleMember(["redux", "ramda", "@reduxjs/toolkit", "recompose"], "compose")
+            .getACall()
       or
       this = LodashUnderscore::member("flowRight").getACall()
     }
@@ -96,7 +98,7 @@ module FunctionCompositionCall {
     override DataFlow::Node getOperandNode(int i) { result = getEffectiveArgument(i) }
   }
 
-  /** A call whose arguments are functions `f,g,h` which are composed into `f(g(h(...))` */
+  /** A call whose arguments are functions `f,g,h` which are composed into `h(g(f(...))` */
   private class LeftToRight extends WithArrayOverloading {
     LeftToRight() {
       this = DataFlow::moduleImport("just-compose").getACall()
@@ -110,20 +112,15 @@ module FunctionCompositionCall {
   }
 }
 
-/**
- * A taint step for a composed function.
- */
-private class ComposedFunctionTaintStep extends TaintTracking::AdditionalTaintStep {
-  FunctionCompositionCall composed;
-  DataFlow::CallNode call;
-
-  ComposedFunctionTaintStep() {
-    call = composed.getACall() and
-    this = call
-  }
-
+private class ComposedFunctionTaintStep extends TaintTracking::SharedTaintStep {
   override predicate step(DataFlow::Node pred, DataFlow::Node succ) {
-    exists(int fnIndex, DataFlow::FunctionNode fn | fn = composed.getOperandFunction(fnIndex) |
+    exists(
+      int fnIndex, DataFlow::FunctionNode fn, FunctionCompositionCall composed,
+      DataFlow::CallNode call
+    |
+      fn = composed.getOperandFunction(fnIndex) and
+      call = composed.getACall()
+    |
       // flow into the first function
       fnIndex = composed.getNumOperand() - 1 and
       exists(int callArgIndex |
@@ -140,7 +137,7 @@ private class ComposedFunctionTaintStep extends TaintTracking::AdditionalTaintSt
       // flow out of the composed call
       fnIndex = 0 and
       pred = fn.getReturnNode() and
-      succ = this
+      succ = call
     )
   }
 }
